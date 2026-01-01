@@ -6,7 +6,7 @@ Use responsibly. Automating user accounts may violate Discord's Terms of Service
 
 ## Requirements
 
-- Python 3.9+ (tested on Windows)
+- Python 3.9+ (tested on Linux)
 - `pip` to install dependencies
 
 ## Install
