@@ -47,7 +47,7 @@ You should see a login confirmation for each valid token, then the process will 
 ## Run with PM2 (optional)
 
 - PM2 keeps the script running and restarts it on failure.
-- On Windows, ensure Node.js is installed.
+- On Windows or linux, ensure Node.js is installed.
 
 ### Setup
 
