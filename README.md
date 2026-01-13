@@ -47,6 +47,7 @@ You should see a login confirmation for each valid token, then the process will 
 ## Run with PM2 (optional)
 
 - PM2 keeps the script running and restarts it on failure.
+- Automatically restarts after crashes, server reboots, or disconnections.
 - On Windows or linux, ensure Node.js is installed.
 
 ### Setup
@@ -54,6 +55,13 @@ You should see a login confirmation for each valid token, then the process will 
 ```powershell
 # Install PM2 globally
 npm install -g pm2
+
+# Make PM2 start on system boot (Linux)
+pm2 startup
+# Follow the command it gives you (run with sudo)
+
+# Save PM2 process list to auto-start after reboot
+pm2 save
 ```
 
 ### Start
@@ -66,15 +74,16 @@ pm2 start ecosystem.config.js
 
 ```powershell
 pm2 status
-pm2 logs online-forever --lines 100
-pm2 restart online-forever
-pm2 stop online-forever
+pm2 logs discord-always-online-idler --lines 100
+pm2 restart discord-always-online-idler
+pm2 stop discord-always-online-idler
 ```
 
 Notes:
 
 - `ecosystem.config.js` defines up to 5 tokens; extras are ignored by the app.
-- It defaults to the `python` interpreter; override via `PYTHON_INTERPRETER`.
+- PM2 will automatically restart the script if it crashes (max 10 restarts).
+- After running `pm2 startup` and `pm2 save`, the script will auto-start on server reboot.
 - PM2 logs go to `pm2-out.log` and `pm2-error.log`.
 
 ## Behavior
