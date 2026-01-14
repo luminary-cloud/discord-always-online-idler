@@ -11,8 +11,8 @@ module.exports = {
         // Human-like sleep schedule in EU timezone
         HUMAN_SCHEDULE_MODE: 'true', // Set to 'true' to enable realistic sleep/wake cycles
         TIMEZONE: 'Europe/Amsterdam', // EU timezone (CET/CEST)
-        SLEEP_TIME_START: '22', // Earliest hour accounts can go to sleep (22:00)
-        SLEEP_TIME_END: '3', // Latest hour accounts can go to sleep (02:00 next day)
+        SLEEP_TIME_START: '21', // Earliest hour accounts can go to sleep (22:00)
+        SLEEP_TIME_END: '2', // Latest hour accounts can go to sleep (02:00 next day)
         WAKE_TIME_START: '6', // Earliest hour accounts can wake up (06:00)
         WAKE_TIME_END: '10', // Latest hour accounts can wake up (10:00)
         // Game activity settings (fake game playing)
@@ -20,6 +20,7 @@ module.exports = {
         GAME_NAME: 'GAME NAME', // Game name to display
         GAME_IMAGE:
           'https://cdn.discordapp.com/app-icons/', // URL to game icon/image
+        GAME_SESSIONS: '10-15,18-23', // Time windows for gaming (e.g., '11-14,20-23' = afternoon and evening)
         MIN_PLAY_HOURS: '2', // Minimum hours to play per session
         MAX_PLAY_HOURS: '5', // Maximum hours to play per session
       },
