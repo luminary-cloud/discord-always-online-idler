@@ -179,8 +179,12 @@ async def onliner(token, username, human_schedule=False, timezone='Europe/Amster
                 # Only log once when entering sleep, not every 5 minutes
                 if not sleep_logged:
                     now = datetime.now(ZoneInfo(timezone))
-                    print(f"{Fore.WHITE}[{Fore.YELLOW}💤{Fore.WHITE}] {username} is sleeping (offline until ~{current_wake_hour:02d}:00 {timezone})")
+                    print(f"{Fore.WHITE}[{Fore.YELLOW}💤{Fore.WHITE}] {username} is sleeping (offline until ~{current_wake_hour:02d}:{current_wake_minute:02d} {timezone})")
                     sleep_logged = True
+                    # Reset game state when entering sleep
+                    is_playing = False
+                    game_session_end = None
+                    game_start_delay = None
                 # Sleep for 5 minutes then check again
                 await asyncio.sleep(300)
                 continue
@@ -315,8 +319,7 @@ async def onliner(token, username, human_schedule=False, timezone='Europe/Amster
                     # Check every 5 minutes if it's time to sleep
                     if human_schedule and (loop.time() - last_sleep_check) >= 300:
                         if is_sleep_time(timezone, current_sleep_hour, current_sleep_minute, current_wake_hour, current_wake_minute):
-                            now = datetime.now(ZoneInfo(timezone))
-                            print(f"{Fore.WHITE}[{Fore.YELLOW}💤{Fore.WHITE}] {username} going to sleep at {now.strftime('%H:%M')}")
+                            # Close connection to enter sleep state
                             await ws.close()
                             break  # Exit to disconnect and sleep
                         last_sleep_check = loop.time()
@@ -334,8 +337,8 @@ async def onliner(token, username, human_schedule=False, timezone='Europe/Amster
                         await ws.send(json.dumps(hb))
                         next_heartbeat += interval
         except websockets.exceptions.ConnectionClosed as e:
-            # Code 1000 (normal) and 1001 (going away) are expected Discord behavior
-            if e.code in [1000, 1001]:
+            # Code 1000 (normal), 1001 (going away), and 1006 (abnormal) are expected Discord behavior
+            if e.code in [1000, 1001, 1006]:
                 # Silent reconnect for normal closure
                 backoff = 1
                 continue
