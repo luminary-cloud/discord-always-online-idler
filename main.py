@@ -54,6 +54,7 @@ def is_sleep_time(timezone, sleep_hour, sleep_minute, wake_hour, wake_minute):
 async def onliner(token, username, human_schedule=False, timezone='Europe/Amsterdam', sleep_start=22, sleep_end=2, wake_start=6, wake_end=10, play_game=False, game_name='Counter-Strike 2', game_image='', min_play_hours=2, max_play_hours=5, game_sessions='11-14,20-23'):
     backoff = 1
     max_backoff = 60
+    sleep_logged = False  # Track if we've logged the sleep message
     current_sleep_hour = None
     current_wake_hour = None
     current_sleep_minute = None
@@ -173,37 +174,21 @@ async def onliner(token, username, human_schedule=False, timezone='Europe/Amster
                         sessions_str = ", ".join([f"{int(s[0]):02d}:{int((s[0] % 1) * 60):02d} ({s[1]:.1f}h)" for s in daily_game_times])
                         print(f"{Fore.WHITE}[{Fore.CYAN}🎮{Fore.WHITE}] {username} game sessions today: {sessions_str}")
             
-            # Check if we should start a game session based on scheduled times
-            if play_game and daily_game_times and not is_playing and game_session_end is None:
-                now = datetime.now(ZoneInfo(timezone))
-                current_time = now.hour + now.minute / 60.0
-                
-                # Check if it's time for any scheduled session
-                for session_start, session_duration in daily_game_times:
-                    time_until_start = (session_start - current_time) * 3600  # Convert to seconds
-                    
-                    # If we're within 5 minutes of start time or past it (but not too late)
-                    if -300 <= time_until_start <= 300:  # Within 5 min window
-                        play_duration = session_duration * 3600
-                        game_session_end = asyncio.get_event_loop().time() + play_duration
-                        game_start_delay = asyncio.get_event_loop().time() + random.randint(60, 300)  # 1-5 min delay
-                        print(f"{Fore.WHITE}[{Fore.CYAN}⏰{Fore.WHITE}] {username} preparing to start {game_name} (~{session_duration:.1f}h session)")
-                        break
-            
             # Check if it's sleep time before connecting
             if human_schedule and is_sleep_time(timezone, current_sleep_hour, current_sleep_minute, current_wake_hour, current_wake_minute):
                 # Only log once when entering sleep, not every 5 minutes
-                if backoff == 1:  # First time entering sleep state
+                if not sleep_logged:
                     now = datetime.now(ZoneInfo(timezone))
                     print(f"{Fore.WHITE}[{Fore.YELLOW}💤{Fore.WHITE}] {username} is sleeping (offline until ~{current_wake_hour:02d}:00 {timezone})")
+                    sleep_logged = True
                 # Sleep for 5 minutes then check again
                 await asyncio.sleep(300)
-                backoff = 2  # Mark that we've logged sleep
                 continue
-            elif backoff > 1:  # Waking up from sleep
+            elif sleep_logged:  # Was sleeping, now awake
                 now = datetime.now(ZoneInfo(timezone))
                 print(f"{Fore.WHITE}[{Fore.GREEN}☀️{Fore.WHITE}] {username} waking up at {now.strftime('%H:%M')}")
-                backoff = 1  # Reset backoff
+                sleep_logged = False
+                backoff = 1  # Reset backoff on successful wake
             
             async with websockets.connect(
                 "wss://gateway.discord.gg/?v=9&encoding=json",
@@ -261,8 +246,27 @@ async def onliner(token, username, human_schedule=False, timezone='Europe/Amster
                 loop = asyncio.get_event_loop()
                 next_heartbeat = loop.time() + interval
                 last_sleep_check = loop.time()
+                last_game_check = loop.time()
                 
                 while True:
+                    # Check if we should start a game session based on scheduled times (every 60 seconds)
+                    if play_game and daily_game_times and not is_playing and game_session_end is None and (loop.time() - last_game_check) >= 60:
+                        now = datetime.now(ZoneInfo(timezone))
+                        current_time = now.hour + now.minute / 60.0
+                        
+                        # Check if it's time for any scheduled session
+                        for session_start, session_duration in daily_game_times:
+                            time_until_start = (session_start - current_time) * 3600  # Convert to seconds
+                            
+                            # If we're within 5 minutes of start time or past it (but not too late)
+                            if -300 <= time_until_start <= 300:  # Within 5 min window
+                                play_duration = session_duration * 3600
+                                game_session_end = loop.time() + play_duration
+                                game_start_delay = loop.time() + random.randint(60, 300)  # 1-5 min delay
+                                print(f"{Fore.WHITE}[{Fore.CYAN}⏰{Fore.WHITE}] {username} preparing to start {game_name} (~{session_duration:.1f}h session)")
+                                break
+                        last_game_check = loop.time()
+                    
                     # Check if it's time to start playing after delay
                     if play_game and not is_playing and game_start_delay and loop.time() >= game_start_delay:
                         is_playing = True
@@ -329,6 +333,16 @@ async def onliner(token, username, human_schedule=False, timezone='Europe/Amster
                         hb = {"op": 1, "d": seq}
                         await ws.send(json.dumps(hb))
                         next_heartbeat += interval
+        except websockets.exceptions.ConnectionClosed as e:
+            # Code 1000 (normal) and 1001 (going away) are expected Discord behavior
+            if e.code in [1000, 1001]:
+                # Silent reconnect for normal closure
+                backoff = 1
+                continue
+            else:
+                print(f"{Fore.WHITE}[{Fore.RED}-{Fore.WHITE}] Connection closed ({e.code}): {e.reason}. Retrying...")
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, max_backoff)
         except Exception as e:
             print(f"{Fore.WHITE}[{Fore.RED}-{Fore.WHITE}] Connection error: {e}. Retrying...")
             await asyncio.sleep(backoff)
