@@ -3,7 +3,7 @@ module.exports = {
     {
       name: 'discord-always-online-idler',
       script: 'main.py',
-      interpreter: 'python3',
+      interpreter: './venv/bin/python3',
       cwd: __dirname,
       env: {
         // Provide up to 5 tokens; extras will be ignored by the app
@@ -18,8 +18,7 @@ module.exports = {
         // Game activity settings (fake game playing)
         GAME_ACCOUNTS: '', // Comma-separated usernames or user IDs to play the game (e.g., 'user1,user2,123456789')
         GAME_NAME: 'GAME NAME', // Game name to display
-        GAME_IMAGE:
-          'https://cdn.discordapp.com/app-icons/', // URL to game icon/image
+        GAME_IMAGE: 'https://cdn.discordapp.com/app-icons/', // URL to game icon/image
         GAME_SESSIONS: '10-15,18-23', // Time windows for gaming (e.g., '11-14,20-23' = afternoon and evening)
         MIN_PLAY_HOURS: '2', // Minimum hours to play per session
         MAX_PLAY_HOURS: '5', // Maximum hours to play per session

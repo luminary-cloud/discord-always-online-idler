@@ -66,6 +66,11 @@ async def onliner(token, username, human_schedule=False, timezone='Europe/Amster
     daily_game_times = []  # Scheduled game times for today [(start_time, duration), ...]
     game_times_generated = None  # Date when game times were generated
     
+    # Session tracking for RESUME support
+    session_id = None
+    resume_gateway_url = None
+    seq = None
+    
     # Parse game session windows (e.g., "11-14,20-23")
     game_session_windows = []
     if play_game and game_sessions:
@@ -194,30 +199,70 @@ async def onliner(token, username, human_schedule=False, timezone='Europe/Amster
                 sleep_logged = False
                 backoff = 1  # Reset backoff on successful wake
             
+            # Use resume gateway URL if available, otherwise use default
+            gateway_url = resume_gateway_url if resume_gateway_url else "wss://gateway.discord.gg/?v=9&encoding=json"
+            
             async with websockets.connect(
-                "wss://gateway.discord.gg/?v=9&encoding=json",
+                gateway_url,
                 max_size=None,
             ) as ws:
                 hello = json.loads(await ws.recv())
                 interval = hello["d"]["heartbeat_interval"] / 1000
+                # Add jitter to prevent all clients from syncing heartbeats
+                jitter = random.uniform(0, 5)
+                interval += jitter
 
-                auth = {
-                    "op": 2,
-                    "d": {
-                        "token": token,
-                        "properties": {
-                            "$os": "Windows 10",
-                            "$browser": "Google Chrome",
-                            "$device": "Windows",
+                # Try to RESUME if we have a session, otherwise IDENTIFY
+                if session_id and seq is not None:
+                    resume = {
+                        "op": 6,
+                        "d": {
+                            "token": token,
+                            "session_id": session_id,
+                            "seq": seq
+                        }
+                    }
+                    await ws.send(json.dumps(resume))
+                else:
+                    auth = {
+                        "op": 2,
+                        "d": {
+                            "token": token,
+                            "properties": {
+                                "$os": "Windows 10",
+                                "$browser": "Google Chrome",
+                                "$device": "Windows",
+                            },
                         },
-                    },
-                }
-                await ws.send(json.dumps(auth))
+                    }
+                    await ws.send(json.dumps(auth))
 
-                # Wait for READY event before sending presence
-                await asyncio.sleep(2)
+                # Wait for READY or RESUMED event
+                ready_received = False
+                while not ready_received:
+                    msg = await ws.recv()
+                    evt = json.loads(msg)
+                    if evt.get("t") == "READY":
+                        session_id = evt["d"]["session_id"]
+                        resume_gateway_url = evt["d"].get("resume_gateway_url", "wss://gateway.discord.gg/?v=9&encoding=json")
+                        ready_received = True
+                    elif evt.get("t") == "RESUMED":
+                        ready_received = True
+                    elif evt.get("op") == 9:  # INVALID_SESSION
+                        session_id = None
+                        seq = None
+                        resume_gateway_url = None
+                        # Wait a bit then reconnect with IDENTIFY
+                        await asyncio.sleep(random.uniform(1, 5))
+                        await ws.close()
+                        break
+                    if "s" in evt and evt["s"]:
+                        seq = evt["s"]
+                
+                if not ready_received:
+                    continue  # Reconnect
 
-                # Send presence update with game activity if playing
+                # Send presence update with game activity if playing (after READY)
                 if play_game and is_playing:
                     activity = {
                         "name": game_name,
@@ -246,15 +291,22 @@ async def onliner(token, username, human_schedule=False, timezone='Europe/Amster
                     }
                     await ws.send(json.dumps(presence))
 
-                seq = None
                 loop = asyncio.get_event_loop()
                 next_heartbeat = loop.time() + interval
                 last_sleep_check = loop.time()
                 last_game_check = loop.time()
+                last_heartbeat_ack = loop.time()
+                heartbeat_ack_received = True
                 
                 while True:
-                    # Check if we should start a game session based on scheduled times (every 60 seconds)
-                    if play_game and daily_game_times and not is_playing and game_session_end is None and (loop.time() - last_game_check) >= 60:
+                    # Check for zombie connection (no heartbeat ACK in 2 intervals)
+                    if not heartbeat_ack_received and (loop.time() - last_heartbeat_ack) > (interval * 2):
+                        print(f"{Fore.WHITE}[{Fore.YELLOW}⚠{Fore.WHITE}] {username} zombie connection detected, reconnecting...")
+                        await ws.close()
+                        break
+                    
+                    # Check if we should start a game session based on scheduled times (every 90 seconds to reduce checks)
+                    if play_game and daily_game_times and not is_playing and game_session_end is None and (loop.time() - last_game_check) >= 90:
                         now = datetime.now(ZoneInfo(timezone))
                         current_time = now.hour + now.minute / 60.0
                         
@@ -328,26 +380,56 @@ async def onliner(token, username, human_schedule=False, timezone='Europe/Amster
                     try:
                         msg = await asyncio.wait_for(ws.recv(), timeout=timeout)
                         evt = json.loads(msg)
-                        if "s" in evt:
+                        
+                        # Update sequence number
+                        if "s" in evt and evt["s"]:
                             seq = evt["s"]
+                        
+                        # Handle heartbeat ACK
                         if evt.get("op") == 11:
-                            pass
+                            heartbeat_ack_received = True
+                            last_heartbeat_ack = loop.time()
+                        
+                        # Handle reconnect request from Discord
+                        elif evt.get("op") == 7:
+                            print(f"{Fore.WHITE}[{Fore.CYAN}🔄{Fore.WHITE}] {username} received reconnect request")
+                            await ws.close()
+                            backoff = 1  # Reset backoff for requested reconnect
+                            break
+                        
+                        # Handle invalid session
+                        elif evt.get("op") == 9:
+                            session_id = None
+                            seq = None
+                            resume_gateway_url = None
+                            resumable = evt.get("d", False)
+                            if not resumable:
+                                await asyncio.sleep(random.uniform(1, 5))
+                            await ws.close()
+                            break
+                    
                     except asyncio.TimeoutError:
+                        # Time to send heartbeat
+                        heartbeat_ack_received = False
                         hb = {"op": 1, "d": seq}
                         await ws.send(json.dumps(hb))
                         next_heartbeat += interval
         except websockets.exceptions.ConnectionClosed as e:
-            # Code 1000 (normal), 1001 (going away), and 1006 (abnormal) are expected Discord behavior
-            if e.code in [1000, 1001, 1006]:
-                # Silent reconnect for normal closure
+            # Code 1000 (normal), 1001 (going away), 1006 (abnormal), and 4000 (unknown error) are common
+            if e.code in [1000, 1001, 1006, 4000]:
+                # Silent reconnect for normal/expected closures
                 backoff = 1
                 continue
+            # Authentication failed or invalid
+            elif e.code in [4004, 4010, 4011, 4012, 4013, 4014]:
+                print(f"{Fore.WHITE}[{Fore.RED}-{Fore.WHITE}] {username} authentication error ({e.code}): {e.reason}. Cannot reconnect.")
+                return  # Stop this account
             else:
-                print(f"{Fore.WHITE}[{Fore.RED}-{Fore.WHITE}] Connection closed ({e.code}): {e.reason}. Retrying...")
+                print(f"{Fore.WHITE}[{Fore.RED}-{Fore.WHITE}] {username} connection closed ({e.code}): {e.reason}. Retrying...")
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, max_backoff)
         except Exception as e:
-            print(f"{Fore.WHITE}[{Fore.RED}-{Fore.WHITE}] Connection error: {e}. Retrying...")
+            print(f"{Fore.WHITE}[{Fore.RED}-{Fore.WHITE}] {username} connection error: {e}. Retrying...")
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, max_backoff)
 
